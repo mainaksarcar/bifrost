@@ -106,6 +106,9 @@ func TestTokenManager_NonOKResponseSetsAllowFallbacksFalse(t *testing.T) {
 	defer srv.Close()
 
 	tm := newTestTokenManager("bad-oauth-token", srv.URL)
+	// Seed a stale JWT so the clearing assertion below is meaningful.
+	tm.apiToken = "stale-jwt"
+	tm.expiresAt = time.Now().Add(-5 * time.Minute)
 	_, _, bifrostErr := tm.getToken()
 
 	if bifrostErr == nil {

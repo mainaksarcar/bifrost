@@ -79,7 +79,7 @@ func buildOAuthHTTPClient(config *lib.Config) *http.Client {
 	}
 	tr := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	if pc.SkipTLSVerify {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 — user-configured skip
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} // #nosec G402 — user-configured skip
 	}
 	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
 }
@@ -102,7 +102,10 @@ type DeviceLoginInitiateResponse struct {
 // initiateDeviceLogin handles POST /api/providers/copilot/device-login/initiate
 // Starts the GitHub OAuth device code flow by requesting a device code.
 func (h *CopilotHandler) initiateDeviceLogin(ctx *fasthttp.RequestCtx) {
-	body := fmt.Sprintf(`{"client_id": %q, "scope": "read:user"}`, githubClientID())
+	body := url.Values{
+		"client_id": {githubClientID()},
+		"scope":     {"read:user"},
+	}.Encode()
 
 	req, err := http.NewRequest(http.MethodPost, h.deviceCodeURL, strings.NewReader(body))
 	if err != nil {
@@ -110,7 +113,7 @@ func (h *CopilotHandler) initiateDeviceLogin(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
@@ -171,8 +174,11 @@ func (h *CopilotHandler) pollDeviceLogin(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	body := fmt.Sprintf(`{"client_id": %q, "device_code": %q, "grant_type": "urn:ietf:params:oauth:grant-type:device_code"}`,
-		githubClientID(), pollReq.DeviceCode)
+	body := url.Values{
+		"client_id":   {githubClientID()},
+		"device_code": {pollReq.DeviceCode},
+		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+	}.Encode()
 
 	req, err := http.NewRequest(http.MethodPost, h.accessTokenURL, strings.NewReader(body))
 	if err != nil {
@@ -180,7 +186,7 @@ func (h *CopilotHandler) pollDeviceLogin(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
