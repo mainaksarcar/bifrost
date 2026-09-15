@@ -10,11 +10,13 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TagInput } from "@/components/ui/tagInput";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { hasCopilotApiToken, isRedacted } from "@/lib/utils/validation";
 import { Info } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Control, UseFormReturn } from "react-hook-form";
 import { DeploymentsTable } from "./deploymentsTable";
+import { CopilotAuthForm } from "./copilotAuthForm";
 
 // Providers that support batch APIs
 const BATCH_SUPPORTED_PROVIDERS = ["openai", "bedrock", "anthropic", "gemini", "azure", "vertex", "wafer"];
@@ -26,6 +28,10 @@ interface Props {
 	// Drives which credential UI renders; falls back to providerName for native providers.
 	baseProviderType?: string;
 	form: UseFormReturn<any>;
+	onCopilotAuthorized?: (token: string) => Promise<void>;
+	authDisabled?: boolean;
+	onRefreshModels?: () => void;
+	refreshingModels?: boolean;
 }
 
 // Batch API form field for all providers
@@ -137,7 +143,16 @@ function VPCEndpointsFormField({
 	);
 }
 
-export function ApiKeyFormFragment({ control, providerName, baseProviderType, form }: Props) {
+export function ApiKeyFormFragment({
+	control,
+	providerName,
+	baseProviderType,
+	form,
+	onCopilotAuthorized,
+	authDisabled = false,
+	onRefreshModels,
+	refreshingModels,
+}: Props) {
 	// Credential UI keys off the base provider type for custom providers; the
 	// model list, deployments table, and API calls still use the real providerName.
 	const effectiveProvider = baseProviderType ?? providerName;
@@ -153,10 +168,15 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 	const isFireworks = effectiveProvider === "fireworks";
 	const isDatabricks = effectiveProvider === "databricks";
 	const isGithubCopilot = effectiveProvider === "github-copilot";
+	const copilotConfig = form.watch("key.github_copilot_key_config");
+	const legacyCopilotApp = isGithubCopilot && !copilotConfig?.auth_mode && !!(copilotConfig?.app_id?.value || copilotConfig?.app_id?.ref);
 	// Reactive, so the App-credential labels stay truthful. Once a Copilot token is present
 	// those fields genuinely are optional, and a static "(Required)" would contradict the
 	// section note telling the operator they can leave them blank.
 	const copilotAppSuffix = hasCopilotApiToken(form.watch("key.value")) ? "(Optional)" : "(Required)";
+	// The model catalog is only discoverable once a credential exists, so model access
+	// stays inert until then rather than offering an empty picker.
+	const copilotNeedsAuth = isGithubCopilot && !legacyCopilotApp && !hasCopilotApiToken(form.watch("key.value"));
 	const isKeylessProvider = isOllama || isSGL;
 	const supportsBatchAPI = BATCH_SUPPORTED_PROVIDERS.includes(effectiveProvider);
 
@@ -273,7 +293,7 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 
 	return (
 		<div data-tab="api-keys" className="space-y-4 overflow-hidden">
-			<div className="flex items-start gap-4">
+			<div className={isGithubCopilot ? "grid grid-cols-[minmax(0,1fr)_96px] items-start gap-4" : "flex items-start gap-4"}>
 				<div className="flex-1">
 					<FormField
 						control={control}
@@ -315,7 +335,7 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 							<FormControl>
 								<Input
 									placeholder="1.0"
-									className="w-[260px]"
+									className={isGithubCopilot ? "w-full" : "w-[260px]"}
 									value={field.value === undefined || field.value === null ? "" : String(field.value)}
 									onChange={(e) => {
 										// Keep as string during typing to allow partial input
@@ -342,7 +362,7 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 				/>
 			</div>
 			{/* Hide API Key field for providers with dedicated auth tabs */}
-			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && !isDatabricks && (
+			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && !isDatabricks && (!isGithubCopilot || legacyCopilotApp) && (
 				<FormField
 					control={control}
 					name={`key.value`}
@@ -370,8 +390,20 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 					)}
 				/>
 			)}
+			{isGithubCopilot && !legacyCopilotApp && onCopilotAuthorized && (
+				<CopilotAuthForm form={form} onAuthorized={onCopilotAuthorized} disabled={authDisabled} />
+			)}
 			{!isVLLM && (
-				<>
+				<div className={cn("space-y-4", copilotNeedsAuth && "pointer-events-none opacity-50")} data-testid="model-access-block">
+					{copilotNeedsAuth && (
+						<div
+							className="bg-muted/40 text-muted-foreground flex items-center gap-2 rounded-sm border border-dashed p-3 text-xs"
+							data-testid="copilot-model-access-hint"
+						>
+							<Info className="size-3.5 shrink-0" />
+							<span>Authenticate with GitHub above to configure model access for this key.</span>
+						</div>
+					)}
 					<FormField
 						control={control}
 						name={`key.models`}
@@ -421,6 +453,9 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 													: "Search models..."
 										}
 										unfiltered={true}
+										{...(isGithubCopilot
+											? { onRefresh: onRefreshModels, isRefreshing: refreshingModels, refreshDisabled: form.formState.isDirty }
+											: {})}
 									/>
 								</FormControl>
 								<FormMessage />
@@ -515,7 +550,7 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 							</FormItem>
 						)}
 					/>
-				</>
+				</div>
 			)}
 			{supportsBatchAPI && !isBedrock && !isAzure && !isVertex && <BatchAPIFormField control={control} form={form} />}
 			{isAzure && (
@@ -1064,7 +1099,7 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 					/>
 				</div>
 			)}
-			{isGithubCopilot && (
+			{legacyCopilotApp && (
 				<div className="space-y-4">
 					<Separator />
 					<div className="bg-muted/50 flex items-start gap-2 rounded-md border p-3">

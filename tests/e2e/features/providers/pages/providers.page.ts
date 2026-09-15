@@ -48,6 +48,20 @@ export class ProvidersPage extends BasePage {
   readonly keySaveBtn: Locator
   readonly keyCancelBtn: Locator
 
+  // GitHub Copilot auth (github-copilot provider)
+  readonly copilotDeviceLoginTab: Locator
+  readonly copilotManualTokenTab: Locator
+  readonly copilotClientIdInput: Locator
+  readonly copilotDeviceLoginBtn: Locator
+  readonly copilotDeviceCode: Locator
+  readonly copilotCopyCodeBtn: Locator
+  readonly copilotConfirmAuthBtn: Locator
+  readonly copilotCancelLoginBtn: Locator
+  readonly copilotAuthStatusCard: Locator
+  readonly copilotReauthToggle: Locator
+  readonly copilotModelAccessHint: Locator
+  readonly copilotApiTokenInput: Locator
+
   constructor(page: Page) {
     super(page)
 
@@ -76,6 +90,20 @@ export class ProvidersPage extends BasePage {
     this.keyForm = page.getByTestId('key-form')
     this.keySaveBtn = page.getByTestId('key-save-btn')
     this.keyCancelBtn = page.getByTestId('key-cancel-btn')
+
+    // GitHub Copilot auth
+    this.copilotDeviceLoginTab = page.getByTestId('apikey-copilot-device-login-tab')
+    this.copilotManualTokenTab = page.getByTestId('apikey-copilot-manual-token-tab')
+    this.copilotClientIdInput = page.getByTestId('copilot-client-id')
+    this.copilotDeviceLoginBtn = page.getByTestId('copilot-device-login-button')
+    this.copilotDeviceCode = page.getByTestId('copilot-device-code')
+    this.copilotCopyCodeBtn = page.getByTestId('copilot-copy-code-button')
+    this.copilotConfirmAuthBtn = page.getByTestId('copilot-confirm-auth-button')
+    this.copilotCancelLoginBtn = page.getByTestId('copilot-cancel-login-button')
+    this.copilotAuthStatusCard = page.getByTestId('copilot-auth-status-card')
+    this.copilotReauthToggle = page.getByTestId('copilot-reauth-toggle')
+    this.copilotModelAccessHint = page.getByTestId('copilot-model-access-hint')
+    this.copilotApiTokenInput = page.getByTestId('copilot-api-token')
   }
 
   /**

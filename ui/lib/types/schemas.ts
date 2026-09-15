@@ -306,6 +306,8 @@ export const githubCopilotKeyConfigComplete = (
 // for shape, so a typo is caught in the form rather than at the first inference call.
 export const githubCopilotKeyConfigSchema = z
 	.object({
+		auth_mode: z.enum(["oauth", "api_token"]).optional(),
+		oauth_client_id: z.string().trim().max(256).optional(),
 		app_id: secretVarSchema.optional(),
 		installation_id: secretVarSchema.optional(),
 		repository_id: secretVarSchema.optional(),
@@ -313,6 +315,11 @@ export const githubCopilotKeyConfigSchema = z
 		github_domain: secretVarSchema.optional(),
 	})
 	.superRefine((data, ctx) => {
+		if (data.auth_mode) {
+			if ([data.app_id, data.installation_id, data.repository_id, data.private_key].some(isSecretVarSet))
+				ctx.addIssue({ code: "custom", path: ["auth_mode"], message: "Do not combine user tokens with GitHub App credentials" });
+			return;
+		}
 		const started =
 			isSecretVarSet(data.app_id) ||
 			isSecretVarSet(data.installation_id) ||
@@ -538,7 +545,20 @@ export const modelProviderKeySchema = z
 			message: "API Key is required",
 			path: ["value"],
 		},
-	);
+	)
+	// Checked here rather than on the nested block so it can see whether a credential
+	// exists: an untouched new key has chosen OAuth but supplied nothing yet, and is
+	// incomplete rather than invalid.
+	.superRefine((data, ctx) => {
+		const copilot = data.github_copilot_key_config;
+		if (copilot?.auth_mode === "oauth" && isSecretVarSet(data.value) && !copilot.oauth_client_id?.trim()) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["github_copilot_key_config", "oauth_client_id"],
+				message: "OAuth Client ID is required",
+			});
+		}
+	});
 
 // Network config schema
 export const networkConfigSchema = z

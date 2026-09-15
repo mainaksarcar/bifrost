@@ -871,6 +871,8 @@ type DatabricksKeyConfig struct {
 //
 // See https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/server-to-server-tokens
 type GithubCopilotKeyConfig struct {
+	AuthMode       string    `json:"auth_mode,omitempty"`
+	OAuthClientID  string    `json:"oauth_client_id,omitempty"`
 	AppID          SecretVar `json:"app_id"`                  // GitHub App ID or Client ID; the App JWT issuer (required)
 	InstallationID SecretVar `json:"installation_id"`         // Installation to mint tokens for; digits only (required)
 	RepositoryID   SecretVar `json:"repository_id"`           // Repository the installation token is scoped to; digits only (required)

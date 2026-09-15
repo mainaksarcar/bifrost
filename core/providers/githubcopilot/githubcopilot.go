@@ -35,6 +35,8 @@ type githubCopilotProvider struct {
 	client              *fasthttp.Client
 	streamingClient     *fasthttp.Client
 	exchangeClient      *fasthttp.Client
+	newSDKClient        sdkClientFactory
+	sdkSlots            chan struct{}
 	networkConfig       schemas.NetworkConfig
 	sendBackRawRequest  bool
 	sendBackRawResponse bool
@@ -87,6 +89,8 @@ func NewGithubCopilotProvider(config *schemas.ProviderConfig, logger schemas.Log
 	return &githubCopilotProvider{
 		logger:              logger,
 		client:              client,
+		newSDKClient:        newInProcessSDKClient,
+		sdkSlots:            make(chan struct{}, 4),
 		streamingClient:     streamingClient,
 		exchangeClient:      exchangeClient,
 		networkConfig:       config.NetworkConfig,
@@ -110,27 +114,32 @@ func (p *githubCopilotProvider) ListModels(ctx *schemas.BifrostContext, keys []s
 		return nil, configurationError("github copilot: no keys configured")
 	}
 
-	creds, bErr := resolveCredentials(ctx, keys[0], p.exchangeClient, p.networkConfig.BaseURL, p.logger)
-	if bErr != nil {
-		return nil, bErr
-	}
+	return providerUtils.HandleMultipleListModelsRequests(ctx, keys, request, func(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostListModelsRequest) (*schemas.BifrostListModelsResponse, *schemas.BifrostError) {
+		if isOAuthKey(key) {
+			return p.sdkListModels(ctx, key, request)
+		}
+		creds, bErr := resolveCredentials(ctx, key, p.exchangeClient, p.networkConfig.BaseURL, p.logger)
+		if bErr != nil {
+			return nil, bErr
+		}
 
-	// ListModelsByKey reads key.Value for the Authorization header, so hand it the
-	// resolved token rather than the stored credential.
-	authKey := keys[0]
-	authKey.Value = *schemas.NewSecretVar(creds.Token)
+		// ListModelsByKey reads key.Value for the Authorization header, so hand it the
+		// resolved token rather than the stored credential.
+		authKey := key
+		authKey.Value = *schemas.NewSecretVar(creds.Token)
 
-	return openai.ListModelsByKey(
-		ctx,
-		p.client,
-		creds.BaseURL+providerUtils.GetPathFromContext(ctx, "/models"),
-		authKey,
-		request != nil && request.Unfiltered,
-		p.mergeEditorHeaders(nil),
-		p.GetProviderKey(),
-		providerUtils.ShouldSendBackRawRequest(ctx, p.sendBackRawRequest),
-		providerUtils.ShouldSendBackRawResponse(ctx, p.sendBackRawResponse),
-	)
+		return openai.ListModelsByKey(
+			ctx,
+			p.client,
+			creds.BaseURL+providerUtils.GetPathFromContext(ctx, "/models"),
+			authKey,
+			request != nil && request.Unfiltered,
+			p.mergeEditorHeaders(nil),
+			p.GetProviderKey(),
+			providerUtils.ShouldSendBackRawRequest(ctx, p.sendBackRawRequest),
+			providerUtils.ShouldSendBackRawResponse(ctx, p.sendBackRawResponse),
+		)
+	})
 }
 
 // mergeEditorHeaders overlays the editor identity onto the operator's extra headers.
@@ -163,6 +172,9 @@ func (p *githubCopilotProvider) TextCompletionStream(ctx *schemas.BifrostContext
 
 // ChatCompletion performs a chat completion request to the Copilot API.
 func (p *githubCopilotProvider) ChatCompletion(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostChatRequest) (*schemas.BifrostChatResponse, *schemas.BifrostError) {
+	if isOAuthKey(key) {
+		return p.sdkChatCompletion(ctx, key, request)
+	}
 	creds, bErr := resolveCredentials(ctx, key, p.exchangeClient, p.networkConfig.BaseURL, p.logger)
 	if bErr != nil {
 		return nil, bErr
@@ -187,6 +199,9 @@ func (p *githubCopilotProvider) ChatCompletion(ctx *schemas.BifrostContext, key 
 
 // ChatCompletionStream performs a streaming chat completion request to the Copilot API.
 func (p *githubCopilotProvider) ChatCompletionStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
+	if isOAuthKey(key) {
+		return nil, providerUtils.NewUnsupportedOperationError(schemas.ChatCompletionStreamRequest, p.GetProviderKey())
+	}
 	creds, bErr := resolveCredentials(ctx, key, p.exchangeClient, p.networkConfig.BaseURL, p.logger)
 	if bErr != nil {
 		return nil, bErr

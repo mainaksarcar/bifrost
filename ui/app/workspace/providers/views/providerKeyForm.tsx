@@ -3,13 +3,18 @@ import { ConfigSyncAlert } from "@/components/ui/configSyncAlert";
 import { Form } from "@/components/ui/form";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getErrorMessage } from "@/lib/store";
-import { useCreateProviderKeyMutation, useGetProviderKeysQuery, useUpdateProviderKeyMutation } from "@/lib/store/apis/providersApi";
-import { ModelProvider } from "@/lib/types/config";
+import {
+	useCreateProviderKeyMutation,
+	useGetProviderKeysQuery,
+	useUpdateProviderKeyMutation,
+	useRefreshProviderModelsMutation,
+} from "@/lib/store/apis/providersApi";
+import { ModelProvider, ModelProviderKey } from "@/lib/types/config";
 import { modelProviderKeySchema } from "@/lib/types/schemas";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { v4 as uuid } from "uuid";
@@ -21,6 +26,7 @@ interface Props {
 	keyId: string | null;
 	onCancel: () => void;
 	onSave: () => void;
+	onCreated?: () => void;
 }
 
 // Create a simple form schema using only ModelProviderKeySchema
@@ -30,13 +36,17 @@ const providerKeyFormSchema = z.object({
 
 type ProviderKeyFormValues = z.infer<typeof modelProviderKeySchema>;
 
-export default function ProviderKeyForm({ provider, keyId, onCancel, onSave }: Props) {
+export default function ProviderKeyForm({ provider, keyId, onCancel, onSave, onCreated }: Props) {
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
 	const [createProviderKey, { isLoading: isCreatingProviderKey }] = useCreateProviderKeyMutation();
 	const [updateProviderKey, { isLoading: isUpdatingProviderKey }] = useUpdateProviderKeyMutation();
 	const { data: keys = [] } = useGetProviderKeysQuery(provider.name);
-	const isEditing = keyId !== null;
-	const currentKey = keyId ? keys.find((k) => k.id === keyId) : undefined;
+	const [savedKeyId, setSavedKeyId] = useState(keyId);
+	const [refreshModels, { isLoading: refreshingModels }] = useRefreshProviderModelsMutation();
+	const [refreshStatus, setRefreshStatus] = useState("");
+	const isCopilot = (provider.custom_provider_config?.base_provider_type ?? provider.name) === "github-copilot";
+	const isEditing = savedKeyId !== null;
+	const currentKey = savedKeyId ? keys.find((k) => k.id === savedKeyId) : undefined;
 
 	const form = useForm({
 		resolver: zodResolver(providerKeyFormSchema),
@@ -50,6 +60,7 @@ export default function ProviderKeyForm({ provider, keyId, onCancel, onSave }: P
 				blacklisted_models: [],
 				weight: 1.0,
 				enabled: true,
+				...(isCopilot ? { github_copilot_key_config: { auth_mode: "oauth" as const, oauth_client_id: "" } } : {}),
 			},
 		},
 	});
@@ -81,7 +92,21 @@ export default function ProviderKeyForm({ provider, keyId, onCancel, onSave }: P
 		return null;
 	}, [form?.formState.errors, form?.formState.isValid, form?.formState.isDirty, hasUpdateProviderAccess]);
 
-	const onSubmit = (value: any) => {
+	async function refreshSavedModels() {
+		try {
+			const refreshed = await refreshModels(provider.name).unwrap();
+			if (refreshed.some((key) => key.status === "list_models_failed")) {
+				setRefreshStatus("Credential saved. Model discovery failed for one or more keys.");
+				return false;
+			}
+			setRefreshStatus("Models refreshed.");
+			return true;
+		} catch (error) {
+			setRefreshStatus(`Credential saved. Model refresh failed: ${getErrorMessage(error)}`);
+			return false;
+		}
+	}
+	const onSubmit = async (value: { key: ProviderKeyFormValues }, closeAfter = true) => {
 		if (isEditing && !currentKey) return;
 		// Strip internal _auth_type fields before sending to API
 		const key = { ...value.key };
@@ -108,17 +133,22 @@ export default function ProviderKeyForm({ provider, keyId, onCancel, onSave }: P
 			? updateProviderKey({
 					provider: provider.name,
 					keyId: currentKey!.id,
-					key,
+					key: key as ModelProviderKey,
 				})
 			: createProviderKey({
 					provider: provider.name,
-					key,
+					key: key as ModelProviderKey,
 				});
 
-		mutation
+		return mutation
 			.unwrap()
-			.then(() => {
-				onSave();
+			.then(async (saved) => {
+				setSavedKeyId(saved.id);
+				form.reset({ key: saved as ProviderKeyFormValues });
+				if (!isEditing) onCreated?.();
+				const refreshed = !isCopilot || (await refreshSavedModels());
+				if (closeAfter && refreshed) onSave();
+				return true;
 			})
 			.catch((err) => {
 				if (err?.status === 409) {
@@ -128,19 +158,36 @@ export default function ProviderKeyForm({ provider, keyId, onCancel, onSave }: P
 				toast.error(isEditing ? "Error updating key" : "Error creating key", {
 					description: getErrorMessage(err),
 				});
+				return false;
 			});
 	};
 
+	async function onCopilotAuthorized(token: string) {
+		form.setValue("key.value", { value: token, ref: "" }, { shouldDirty: true, shouldValidate: true });
+		if (!form.getValues("key.name").trim()) form.setValue("key.name", "GitHub Copilot", { shouldDirty: true });
+		if (!(await form.trigger()) || !(await onSubmit(providerKeyFormSchema.parse(form.getValues()), false)))
+			throw new Error("Could not save credential");
+	}
+
 	return (
 		<Form {...form}>
-			<form onSubmit={form.handleSubmit(onSubmit)} className="flex grow flex-col gap-6 pt-4">
+			<form onSubmit={form.handleSubmit((values) => onSubmit(values).then(() => {}))} className="flex grow flex-col gap-6 pt-4">
 				<div className="grow px-4 md:px-8">
 					<ApiKeyFormFragment
 						control={form.control}
 						providerName={provider.name}
 						baseProviderType={provider.custom_provider_config?.base_provider_type}
 						form={form}
+						onCopilotAuthorized={onCopilotAuthorized}
+						authDisabled={!hasUpdateProviderAccess || isCreatingProviderKey || isUpdatingProviderKey}
+						onRefreshModels={refreshSavedModels}
+						refreshingModels={refreshingModels}
 					/>
+					{refreshStatus && (
+						<p role="status" className="mt-3 text-sm" data-testid="copilot-model-refresh-status">
+							{refreshStatus}
+						</p>
+					)}
 					{isEditing && currentKey?.config_hash && <ConfigSyncAlert className="mt-4" />}
 				</div>
 				<div className="bg-card sticky bottom-0 border-t px-4 py-4 md:px-8">

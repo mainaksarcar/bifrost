@@ -354,6 +354,56 @@
   ],
   "item": [
     {
+      "name": "Copilot OAuth SDK Regression",
+      "description": "Requires a saved github-copilot OAuth key and a copilot_inprocess build with the bundled native runtime. Run with no bridge and no BIFROST_COPILOT_SDK_URL. Pins nonstreaming text through the provider-owned SDK. Enable include_preview for this opt-in account-scoped case.",
+      "item": [
+        {
+          "name": "[PREVIEW] github-copilot gpt-5-mini saved OAuth SDK chat",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Saved OAuth key produces assistant text', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var result = pm.response.json();",
+                  "  pm.expect(result.choices[0].message.role).to.equal('assistant');",
+                  "  pm.expect(result.choices[0].message.content).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"github-copilot/gpt-5-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly OK.\"}],\"stream\":false}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "1. Native Bifrost API",
       "description": "Bifrost's own OpenAI-shaped surface. Use a `provider/model` string in the `model` field to route to any configured backend.",
       "item": [

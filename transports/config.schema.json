@@ -4857,6 +4857,16 @@
             "github_copilot_key_config": {
               "type": "object",
               "properties": {
+                "auth_mode": {
+                  "type": "string",
+                  "enum": ["oauth", "api_token"],
+                  "description": "OAuth user token via the SDK runtime, or a pre-generated Copilot API token. Omit for legacy GitHub App configuration."
+                },
+                "oauth_client_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Public OAuth App Client ID used for device authorization."
+                },
                 "app_id": {
                   "type": "string",
                   "minLength": 1,
@@ -4882,7 +4892,11 @@
                   "description": "GitHub Enterprise domain, e.g. acme.ghe.com. Leave unset for github.com."
                 }
               },
-              "required": ["app_id", "installation_id", "repository_id", "private_key"],
+              "anyOf": [
+                { "properties": { "auth_mode": { "const": "oauth" } }, "required": ["auth_mode", "oauth_client_id"] },
+                { "properties": { "auth_mode": { "const": "api_token" } }, "required": ["auth_mode"] },
+                { "not": { "required": ["auth_mode"] }, "required": ["app_id", "installation_id", "repository_id", "private_key"] }
+              ],
               "additionalProperties": false
             }
           }
