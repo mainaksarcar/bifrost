@@ -200,7 +200,7 @@ func (p *githubCopilotProvider) ChatCompletion(ctx *schemas.BifrostContext, key 
 // ChatCompletionStream performs a streaming chat completion request to the Copilot API.
 func (p *githubCopilotProvider) ChatCompletionStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostChatRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 	if isOAuthKey(key) {
-		return nil, providerUtils.NewUnsupportedOperationError(schemas.ChatCompletionStreamRequest, p.GetProviderKey())
+		return p.sdkChatCompletionStream(ctx, postHookRunner, postHookSpanFinalizer, key, request)
 	}
 	creds, bErr := resolveCredentials(ctx, key, p.exchangeClient, p.networkConfig.BaseURL, p.logger)
 	if bErr != nil {

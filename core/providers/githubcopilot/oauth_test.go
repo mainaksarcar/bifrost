@@ -3,6 +3,7 @@ package githubcopilot
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -72,6 +73,16 @@ func (client *fakeSDKClient) Complete(_ context.Context, model, prompt, system s
 
 func (client *fakeSDKClient) Close() {
 	client.closed.Add(1)
+}
+
+// Splits the reply so a caller can tell incremental delivery from one buffered blob.
+func (client *fakeSDKClient) Stream(_ context.Context, model, prompt, system string, onDelta func(string)) (completion, error) {
+	if model != "gpt-5-mini" || prompt != "Reply OK" || system != "Be brief" {
+		return completion{}, errors.New("unexpected completion input")
+	}
+	onDelta("O")
+	onDelta("K")
+	return completion{Content: "OK", Model: "resolved-model"}, nil
 }
 
 func TestOAuthSDKCompletionAndCleanup(t *testing.T) {
@@ -151,4 +162,61 @@ func TestOAuthSDKFilteringAndErrors(t *testing.T) {
 	_, failure = provider.sdkListModels(schemas.NewBifrostContext(cancelled, time.Time{}), key, nil)
 	require.NotNil(t, failure)
 	require.EqualValues(t, 2, closed.Load())
+}
+
+func TestOAuthSDKChatCompletionStream(t *testing.T) {
+	provider, err := NewGithubCopilotProvider(&schemas.ProviderConfig{}, nil)
+	require.NoError(t, err)
+	var closed atomic.Int32
+	provider.newSDKClient = func(_ context.Context, token string) (sdkClient, error) {
+		return &fakeSDKClient{token: token, closed: &closed}, nil
+	}
+	key := schemas.Key{Value: *schemas.NewSecretVar("first"), GithubCopilotKeyConfig: &schemas.GithubCopilotKeyConfig{AuthMode: "oauth", OAuthClientID: "client"}}
+	request := &schemas.BifrostChatRequest{Model: "gpt-5-mini", Input: []schemas.ChatMessage{
+		{Role: schemas.ChatMessageRoleSystem, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("Be brief")}},
+		{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("Reply OK")}},
+	}}
+	ctx := schemas.NewBifrostContext(context.Background(), time.Time{})
+	passthrough := func(_ *schemas.BifrostContext, response *schemas.BifrostResponse, failure *schemas.BifrostError) (*schemas.BifrostResponse, *schemas.BifrostError) {
+		return response, failure
+	}
+
+	stream, failure := provider.ChatCompletionStream(ctx, passthrough, func(context.Context) {}, key, request)
+	require.Nil(t, failure)
+	require.NotNil(t, stream)
+
+	var content strings.Builder
+	var deltas int
+	var model, finishReason string
+	var chunkIndices []int
+	for chunk := range stream {
+		require.Nil(t, chunk.BifrostError)
+		require.NotNil(t, chunk.BifrostChatResponse)
+		if chunk.BifrostChatResponse.Model != "" {
+			model = chunk.BifrostChatResponse.Model
+		}
+		chunkIndices = append(chunkIndices, chunk.BifrostChatResponse.ExtraFields.ChunkIndex)
+		for _, choice := range chunk.BifrostChatResponse.Choices {
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				finishReason = *choice.FinishReason
+			}
+			streamChoice := choice.ChatStreamResponseChoice
+			if streamChoice == nil || streamChoice.Delta == nil || streamChoice.Delta.Content == nil {
+				continue
+			}
+			content.WriteString(*streamChoice.Delta.Content)
+			deltas++
+		}
+	}
+
+	require.Equal(t, "OK", content.String())
+	// More than one delta is the whole point: a single chunk would mean the reply
+	// was buffered to completion and only then handed over.
+	require.Greater(t, deltas, 1, "streaming must deliver incremental deltas")
+	require.Equal(t, "resolved-model", model, "the served model must be reported, not the requested one")
+	require.Equal(t, "stop", finishReason)
+	// Consumers order chunks by index, so the synthesized final chunk must continue
+	// the delta sequence rather than skip a value.
+	require.Equal(t, []int{1, 2, 3}, chunkIndices)
+	require.EqualValues(t, 1, closed.Load(), "the SDK client must be released once the stream ends")
 }
