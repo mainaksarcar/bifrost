@@ -4257,6 +4257,87 @@ func TestBudgetLastResetUsesBudgetQuarterStart(t *testing.T) {
 	assert.False(t, budgetLastReset(true, nil).IsZero())
 }
 
+// TestCreateVirtualKey_UnknownKeyIDsReturn400 is the create-path twin of the
+// update test above: the same caller-supplied key IDs are validated by a
+// separate code path, so fixing only the update side would leave create at 500.
+func TestCreateVirtualKey_UnknownKeyIDsReturn400(t *testing.T) {
+	SetLogger(&mockLogger{})
+	ctx := context.Background()
+	store := setupPricingOverrideHandlerStore(t)
+	handler := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: pricingOverrideTestGovernanceManager{},
+	}
+	require.NoError(t, store.AddProvider(ctx, schemas.ModelProvider("openai"), configstore.ProviderConfig{}))
+
+	reqCtx := newTestRequestCtx(`{"name":"create-badkeys","provider_configs":[{"provider":"openai","key_ids":["no-such-key-id"]}]}`)
+	handler.createVirtualKey(reqCtx)
+	require.Equal(t, fasthttp.StatusBadRequest, reqCtx.Response.StatusCode(),
+		"unknown key_ids on create must be a bad request; body=%s", reqCtx.Response.Body())
+}
+
+// newVirtualKeyUpdateCtx builds an update request for a virtual key, matching
+// how the router delivers the vk_id path param.
+func newVirtualKeyUpdateCtx(vkID, body string) *fasthttp.RequestCtx {
+	ctx := newTestRequestCtx(body)
+	ctx.SetUserValue("vk_id", vkID)
+	return ctx
+}
+
+// TestUpdateVirtualKey_ClientInputErrorsReturn400 pins the status contract for
+// values the caller controls: naming a provider config or MCP config that
+// belongs to a different virtual key, or key IDs that do not exist, is a bad
+// request. Returning 500 tells the operator Bifrost broke and makes the failure
+// look retryable, when the only fix is to correct the payload.
+func TestUpdateVirtualKey_ClientInputErrorsReturn400(t *testing.T) {
+	SetLogger(&mockLogger{})
+	ctx := context.Background()
+	store := setupPricingOverrideHandlerStore(t)
+	handler := &GovernanceHandler{
+		configStore:       store,
+		governanceManager: pricingOverrideTestGovernanceManager{},
+	}
+
+	require.NoError(t, store.AddProvider(ctx, schemas.ModelProvider("openai"), configstore.ProviderConfig{}))
+
+	const vkID = "vk-badinput"
+	active := true
+	require.NoError(t, store.CreateVirtualKey(ctx, &configstoreTables.TableVirtualKey{
+		ID:       vkID,
+		Name:     "BadInput",
+		Value:    *schemas.NewSecretVar("sk-bf-badinput"),
+		IsActive: &active,
+		ProviderConfigs: []configstoreTables.TableVirtualKeyProviderConfig{
+			{VirtualKeyID: vkID, Provider: "openai", AllowAllKeys: true, AllowedModels: schemas.WhiteList{"*"}},
+		},
+	}))
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "provider config id from another virtual key",
+			body: `{"provider_configs":[{"id":99999,"provider":"openai","key_ids":["*"]}]}`,
+		},
+		{
+			name: "key ids that do not exist on a new provider config",
+			body: `{"provider_configs":[{"provider":"openai","key_ids":["no-such-key-id"]}]}`,
+		},
+		{
+			name: "mcp config id from another virtual key",
+			body: `{"mcp_configs":[{"id":99999,"mcp_client_name":"nope"}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reqCtx := newVirtualKeyUpdateCtx(vkID, tc.body)
+			handler.updateVirtualKey(reqCtx)
+			require.Equal(t, fasthttp.StatusBadRequest, reqCtx.Response.StatusCode(),
+				"caller-supplied value must be rejected as a bad request; body=%s", reqCtx.Response.Body())
+		})
+	}
+}
+
 // TestApplyAssignees covers the hook that puts each virtual key's assigned user on
 // the read responses. Before it existed the assignee was only reachable through a
 // per-key endpoint, so the CSV export - which cannot issue one request per row -
