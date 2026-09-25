@@ -617,6 +617,10 @@ func (bifrost *Bifrost) ListAllModels(ctx *schemas.BifrostContext, req *schemas.
 					if !isExpected {
 						providerErr = bifrostErr
 						bifrost.logger.Warn("failed to list models for provider %s: %s", providerKey, bifrostErr.GetErrorString())
+					} else {
+						// Expected while fanning out, but it is still the reason this provider
+						// contributes nothing, so keep it reachable instead of dropping it.
+						bifrost.logger.Debug("skipping models for provider %s: %s", providerKey, bifrostErr.GetErrorString())
 					}
 					// Collect key statuses from error (failure case)
 					if len(bifrostErr.ExtraFields.KeyStatuses) > 0 {
@@ -642,6 +646,12 @@ func (bifrost *Bifrost) ListAllModels(ctx *schemas.BifrostContext, req *schemas.
 
 				// Set the page token for the next request
 				providerRequest.PageToken = response.NextPageToken
+			}
+
+			// A provider contributing nothing is indistinguishable from one that was never
+			// asked, and the swallowed-error branch above logs nothing, so say it plainly.
+			if len(providerModels) == 0 && providerErr == nil {
+				bifrost.logger.Warn("provider %s returned no models", providerKey)
 			}
 
 			results <- providerResult{
