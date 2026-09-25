@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DefaultNetworkConfig } from "@/lib/constants/config";
 import { ProviderFormSchema } from "./providerForm";
+import { modelProviderKeySchema } from "@/lib/types/schemas";
 
 // The provider form validates through ProviderFormSchema, and zodResolver hands
 // react-hook-form the parsed result. Zod strips undeclared keys, so a credential the schema
@@ -110,5 +111,98 @@ describe("ProviderFormSchema github-copilot credentials", () => {
 			});
 			expect(parsed.success, parsed.success ? "" : JSON.stringify(parsed.error.issues)).toBe(true);
 		});
+	});
+});
+// A brand-new Copilot key is seeded with auth_mode "oauth" so the device-login tab is
+// the default. That seed must not make the untouched form report errors before the
+// operator has typed anything.
+describe("modelProviderKeySchema github-copilot OAuth client ID", () => {
+	const key = (overrides: Record<string, unknown>) => ({
+		id: "k1",
+		name: "GitHub Copilot",
+		models: ["*"],
+		weight: 1,
+		...overrides,
+	});
+	const clientIdIssue = (result: ReturnType<typeof modelProviderKeySchema.safeParse>) =>
+		result.success ? [] : result.error.issues.filter((issue) => issue.path.join(".") === "github_copilot_key_config.auth_client_id");
+
+	it("does not flag an untouched new key that has no credential yet", () => {
+		const result = modelProviderKeySchema.safeParse(key({ github_copilot_key_config: { auth_mode: "oauth", auth_client_id: "" } }));
+
+		expect(clientIdIssue(result), "a pristine Add-new-key form must not show a required error").toEqual([]);
+	});
+
+	it("flags a saved OAuth credential that carries no client ID", () => {
+		const result = modelProviderKeySchema.safeParse(
+			key({
+				value: { value: "gho_token", ref: "" },
+				github_copilot_key_config: { auth_mode: "oauth", auth_client_id: "" },
+			}),
+		);
+
+		expect(clientIdIssue(result).map((issue) => issue.message)).toEqual(["OAuth Client ID is required"]);
+	});
+
+	it("accepts an OAuth credential with a client ID", () => {
+		const result = modelProviderKeySchema.safeParse(
+			key({
+				value: { value: "gho_token", ref: "" },
+				github_copilot_key_config: { auth_mode: "oauth", auth_client_id: "Ov23liExample" },
+			}),
+		);
+
+		expect(clientIdIssue(result)).toEqual([]);
+	});
+
+	it("carries the refresh token and expiry a device login returns", () => {
+		const result = modelProviderKeySchema.safeParse(
+			key({
+				value: { value: "ghu_token", ref: "" },
+				github_copilot_key_config: {
+					auth_mode: "oauth",
+					auth_client_id: "Iv23liExample",
+					refresh_token: { value: "ghr_token", ref: "" },
+					token_expires_at: 1789543415,
+				},
+			}),
+		);
+
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result.data.github_copilot_key_config?.refresh_token?.value).toBe("ghr_token");
+			expect(result.data.github_copilot_key_config?.token_expires_at).toBe(1789543415);
+		}
+	});
+
+	// GitHub omits both for apps whose user tokens never expire, so a key without them is
+	// ordinary rather than half-configured.
+	it("accepts an OAuth credential with no refresh token", () => {
+		const result = modelProviderKeySchema.safeParse(
+			key({
+				value: { value: "gho_token", ref: "" },
+				github_copilot_key_config: { auth_mode: "oauth", auth_client_id: "Ov23liExample" },
+			}),
+		);
+
+		expect(result.success).toBe(true);
+	});
+
+	// The refresh token arrives with the user token, so it must not read as a GitHub App
+	// credential and trip the "do not combine" rule.
+	it("does not treat a refresh token as an App credential", () => {
+		const result = modelProviderKeySchema.safeParse(
+			key({
+				value: { value: "ghu_token", ref: "" },
+				github_copilot_key_config: {
+					auth_mode: "oauth",
+					auth_client_id: "Iv23liExample",
+					refresh_token: { value: "ghr_token", ref: "" },
+				},
+			}),
+		);
+
+		const combined = (result.success ? [] : result.error.issues).filter((issue) => issue.message.includes("Do not combine"));
+		expect(combined).toEqual([]);
 	});
 });

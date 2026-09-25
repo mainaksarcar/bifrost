@@ -2,6 +2,7 @@ import Provider from "@/components/provider";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { ModelProvider } from "@/lib/types/config";
 import { toast } from "sonner";
+import { useState } from "react";
 import ProviderKeyForm from "../views/providerKeyForm";
 
 interface Props {
@@ -13,7 +14,8 @@ interface Props {
 }
 
 export default function AddNewKeySheet({ show, onCancel, provider, keyId, providerName }: Props) {
-	const isEditing = keyId !== null;
+	const [autoCreated, setAutoCreated] = useState(false);
+	const isEditing = keyId !== null || autoCreated;
 	const resolvedProviderName = (providerName ?? provider.name).toLowerCase();
 	const isVLLM = resolvedProviderName === "vllm";
 	const isOllamaOrSGL = resolvedProviderName === "ollama" || resolvedProviderName === "sgl";
@@ -44,6 +46,7 @@ export default function AddNewKeySheet({ show, onCancel, provider, keyId, provid
 					provider={provider}
 					keyId={keyId}
 					onCancel={onCancel}
+					onCreated={() => setAutoCreated(true)}
 					onSave={() => {
 						toast.success(successMessage);
 						onCancel();

@@ -246,6 +246,10 @@ export const DefaultDatabricksKeyConfig: DatabricksKeyConfig = {
 
 // GithubCopilotKeyConfig matching Go's schemas.GithubCopilotKeyConfig
 export interface GithubCopilotKeyConfig {
+	auth_mode?: "oauth" | "api_token";
+	auth_client_id?: string;
+	refresh_token?: SecretVar;
+	token_expires_at?: number;
 	app_id: SecretVar;
 	installation_id: SecretVar;
 	repository_id: SecretVar;
@@ -260,7 +264,7 @@ export const DefaultGithubCopilotKeyConfig: GithubCopilotKeyConfig = {
 	repository_id: { value: "", ref: "" },
 	private_key: { value: "", ref: "" },
 	github_domain: { value: "", ref: "" },
-} as const satisfies Required<GithubCopilotKeyConfig>;
+} as const satisfies GithubCopilotKeyConfig;
 
 // Key structure matching Go's schemas.Key
 export interface ModelProviderKey {
