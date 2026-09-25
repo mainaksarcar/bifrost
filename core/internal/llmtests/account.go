@@ -520,6 +520,23 @@ func (account *ComprehensiveTestAccount) GetKeysForProvider(ctx context.Context,
 			},
 		}, nil
 	case schemas.GithubCopilot:
+		// OAuth mode dispatches through the in-process SDK rather than HTTP, and its
+		// credential is a user token that only a device login can mint. Selecting it by
+		// explicit env var keeps the default (GitHub App) path unchanged for operators
+		// who have not opted in.
+		if strings.TrimSpace(os.Getenv("GITHUB_COPILOT_OAUTH_TOKEN")) != "" {
+			return []schemas.Key{
+				{
+					Value:  *schemas.NewSecretVar("env.GITHUB_COPILOT_OAUTH_TOKEN"),
+					Models: []string{"*"},
+					Weight: 1.0,
+					GithubCopilotKeyConfig: &schemas.GithubCopilotKeyConfig{
+						AuthMode:     "oauth",
+						AuthClientID: strings.TrimSpace(os.Getenv("GITHUB_COPILOT_AUTH_CLIENT_ID")),
+					},
+				},
+			}, nil
+		}
 		// Server-to-server auth: the credential is the GitHub App bundle, not a key value.
 		// GITHUB_COPILOT_API_KEY is the alternative direct-token mode and is left unset here.
 		return []schemas.Key{

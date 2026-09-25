@@ -8,11 +8,13 @@ import "testing"
 // provider rather than as "you forgot a secret".
 func TestHasCopilotCredentials(t *testing.T) {
 	const (
-		appID    = "GITHUB_COPILOT_APP_ID"
-		instID   = "GITHUB_COPILOT_INSTALLATION_ID"
-		repoID   = "GITHUB_COPILOT_REPOSITORY_ID"
-		privKey  = "GITHUB_COPILOT_PRIVATE_KEY"
-		apiToken = "GITHUB_COPILOT_API_KEY"
+		appID        = "GITHUB_COPILOT_APP_ID"
+		instID       = "GITHUB_COPILOT_INSTALLATION_ID"
+		repoID       = "GITHUB_COPILOT_REPOSITORY_ID"
+		privKey      = "GITHUB_COPILOT_PRIVATE_KEY"
+		apiToken     = "GITHUB_COPILOT_API_KEY"
+		oauthToken   = "GITHUB_COPILOT_OAUTH_TOKEN"
+		authClientID = "GITHUB_COPILOT_AUTH_CLIENT_ID"
 	)
 	full := map[string]string{appID: "1", instID: "2", repoID: "3", privKey: "pem"}
 
@@ -49,6 +51,12 @@ func TestHasCopilotCredentials(t *testing.T) {
 			}
 			return m
 		}(), true},
+		// OAuth mode needs both halves: the token cannot say which app minted it, and the
+		// client ID cannot authenticate. Half a pair would reach the SDK and fail there.
+		{"oauth pair", map[string]string{oauthToken: "ghu_x", authClientID: "Iv23li"}, true},
+		{"oauth token without client id", map[string]string{oauthToken: "ghu_x"}, false},
+		{"oauth client id without token", map[string]string{authClientID: "Iv23li"}, false},
+		{"whitespace-only oauth token", map[string]string{oauthToken: "  ", authClientID: "Iv23li"}, false},
 	}
 
 	for _, tt := range tests {

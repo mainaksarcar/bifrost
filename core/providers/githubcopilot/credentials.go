@@ -46,6 +46,18 @@ func resolveCredentials(
 	configuredBaseURL string,
 	logger schemas.Logger,
 ) (*copilotCredentials, *schemas.BifrostError) {
+	if config := key.GithubCopilotKeyConfig; config != nil && config.AuthMode != "" {
+		switch config.AuthMode {
+		case "oauth":
+			return nil, configurationError("github copilot: OAuth requests require in-process SDK dispatch")
+		case "api_token":
+			if strings.TrimSpace(key.Value.GetValue()) == "" {
+				return nil, configurationError("github copilot: API token is required")
+			}
+		default:
+			return nil, configurationError("github copilot: unknown authentication mode")
+		}
+	}
 	if token := strings.TrimSpace(key.Value.GetValue()); token != "" {
 		baseURL := strings.TrimRight(strings.TrimSpace(configuredBaseURL), "/")
 		if baseURL == "" {
