@@ -748,6 +748,145 @@ func TestRetryBackoffStopsWhenRequestDeadlineExpires(t *testing.T) {
 	}
 }
 
+// A caller that loses the abandon race is committed to receiving the terminal
+// value, so the worker's send has to be unconditional. While it sat in a select
+// next to req.Context.Done() - which is always ready by then, since the cancel is
+// what started this - Go chose between two ready cases at random and dropped the
+// value on roughly half of runs, wedging the caller forever. Looped because a
+// single pass reproduces it only about a third of the time.
+func TestCancelledRequestAlwaysReceivesTerminalValue(t *testing.T) {
+	for i := range 20 {
+		func() {
+			upstream := newRecordingServer(func(attempt int, w http.ResponseWriter) {
+				writeJSON(w, http.StatusUnauthorized, `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`)
+			})
+			defer upstream.Close()
+
+			account := NewMockAccount()
+			account.AddProviderWithBaseURL(schemas.OpenAI, 1, 1, upstream.URL)
+			account.configs[schemas.OpenAI].NetworkConfig.MaxRetries = 1
+			account.SetKeysForProvider(schemas.OpenAI, []schemas.Key{
+				{ID: "key-a", Name: "key-a", Value: *schemas.NewSecretVar("sk-a"), Models: schemas.WhiteList{"*"}, Weight: 100},
+				{ID: "key-b", Name: "key-b", Value: *schemas.NewSecretVar("sk-b"), Models: schemas.WhiteList{"*"}, Weight: 100},
+			})
+			ctx, cancel := schemas.NewBifrostContextWithCancel(context.Background())
+			defer cancel()
+			tracer := &cancelOnKeySelectionTracer{onNth: 2, cancel: cancel}
+			client, err := Init(context.Background(), schemas.BifrostConfig{
+				Account: account,
+				Logger:  NewDefaultLogger(schemas.LogLevelError),
+				Tracer:  tracer,
+			})
+			if err != nil {
+				t.Fatalf("iteration %d: failed to initialize bifrost: %v", i, err)
+			}
+			defer client.Shutdown()
+
+			errCh := make(chan *schemas.BifrostError, 1)
+			go func() {
+				_, bifrostErr := client.ChatCompletionRequest(ctx, &schemas.BifrostChatRequest{
+					Provider: schemas.OpenAI,
+					Model:    "gpt-4o-mini",
+					Input: []schemas.ChatMessage{
+						{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("hi")}},
+					},
+				})
+				errCh <- bifrostErr
+			}()
+
+			// Bounded so a dropped hand-off fails here rather than hanging the suite
+			// until the package-wide test timeout fires.
+			select {
+			case bifrostErr := <-errCh:
+				if bifrostErr == nil {
+					t.Fatalf("iteration %d: cancelled request returned no error", i)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("iteration %d: cancelled request never returned: the worker claimed delivery and then dropped the value", i)
+			}
+		}()
+	}
+}
+
+// cancelOnPreHandoffTracer cancels the request context at the "miscellaneous"
+// span core opens immediately before the worker claims delivery and sends. That
+// span name is reused earlier in the request, so it is qualified by having
+// already seen "response-parse": the provider has replied and the only thing
+// left is the hand-off, which is the window the claim race lives in.
+type cancelOnPreHandoffTracer struct {
+	schemas.NoOpTracer
+	parsed atomic.Bool
+	fired  atomic.Bool
+	cancel context.CancelFunc
+}
+
+func (t *cancelOnPreHandoffTracer) StartSpanID(ctx context.Context, name string, kind schemas.SpanKind) (string, schemas.SpanHandle) {
+	switch name {
+	case "response-parse":
+		t.parsed.Store(true)
+	case "miscellaneous":
+		if t.parsed.Load() && t.fired.CompareAndSwap(false, true) {
+			t.cancel()
+		}
+	}
+	return t.NoOpTracer.StartSpanID(ctx, name, kind)
+}
+
+// The success hand-off runs the same claim as the error path, so a request
+// cancelled just as the provider's reply lands must still come back - with the
+// response the worker claimed, or a cancellation, never nothing.
+func TestCancelledRequestDuringSuccessfulReplyAlwaysReturns(t *testing.T) {
+	for i := range 20 {
+		func() {
+			upstream := newRecordingServer(func(attempt int, w http.ResponseWriter) {
+				writeJSON(w, http.StatusOK, chatCompletionBody)
+			})
+			defer upstream.Close()
+
+			account := NewMockAccount()
+			account.AddProviderWithBaseURL(schemas.OpenAI, 1, 1, upstream.URL)
+			account.SetKeysForProvider(schemas.OpenAI, []schemas.Key{
+				{ID: "key-a", Name: "key-a", Value: *schemas.NewSecretVar("sk-a"), Models: schemas.WhiteList{"*"}, Weight: 100},
+			})
+			ctx, cancel := schemas.NewBifrostContextWithCancel(context.Background())
+			defer cancel()
+			tracer := &cancelOnPreHandoffTracer{cancel: cancel}
+			client, err := Init(context.Background(), schemas.BifrostConfig{
+				Account: account,
+				Logger:  NewDefaultLogger(schemas.LogLevelError),
+				Tracer:  tracer,
+			})
+			if err != nil {
+				t.Fatalf("iteration %d: failed to initialize bifrost: %v", i, err)
+			}
+			defer client.Shutdown()
+
+			done := make(chan struct{}, 1)
+			go func() {
+				_, _ = client.ChatCompletionRequest(ctx, &schemas.BifrostChatRequest{
+					Provider: schemas.OpenAI,
+					Model:    "gpt-4o-mini",
+					Input: []schemas.ChatMessage{
+						{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: schemas.Ptr("hi")}},
+					},
+				})
+				done <- struct{}{}
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("iteration %d: request never returned: the claimed response was dropped", i)
+			}
+			// A pass only means something if the cancel actually landed in the
+			// hand-off window, which is where the claim race lives.
+			if !tracer.fired.Load() {
+				t.Fatalf("iteration %d: cancel never reached the pre-handoff span", i)
+			}
+		}()
+	}
+}
+
 // cancelOnKeySelectionTracer cancels the request context when the n-th
 // key.selection span starts. Core opens that span once per attempt that selects
 // a key, so the second one is the rotation after a per-key failure: cancelling
