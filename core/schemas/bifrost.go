@@ -1829,7 +1829,7 @@ type BifrostResponseExtraFields struct {
 	GuardrailDebug            *BifrostGuardrailMetadata `json:"guardrail_debug,omitempty"`
 	ParseErrors               []BatchError              `json:"parse_errors,omitempty"` // errors encountered while parsing JSONL batch results
 	ConvertedRequestType      RequestType               `json:"converted_request_type,omitempty"`
-	DroppedCompatPluginParams []string                  `json:"dropped_compat_plugin_params,omitempty"` // params dropped by the compat plugin based on model catalog
+	DroppedCompatPluginParams []string                  `json:"dropped_compat_plugin_params,omitempty"` // params Bifrost removed from the request: by the compat plugin per the model catalog, or by a provider that cannot honor them
 	// DroppedUnsupportedTools lists tool type strings silently stripped from the
 	// request because the target provider/model doesn't support them (e.g.
 	// web_search requested against a non-Nova Bedrock model). Currently populated

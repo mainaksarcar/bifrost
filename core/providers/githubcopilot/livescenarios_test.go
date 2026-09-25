@@ -78,18 +78,53 @@ func TestGithubCopilot(t *testing.T) {
 		},
 	}
 
+	if hasCopilotOAuthCredentials(os.Getenv) {
+		// Without the build tag the SDK cannot start at all, so every scenario would fail
+		// on environment rather than on behaviour. Skipping names the cause instead.
+		if !inProcessBuild {
+			t.Skip("Skipping GitHub Copilot OAuth tests: rebuild with -tags copilot_inprocess " +
+				"and the bundled native runtime (see scripts/copilot-live-test.sh)")
+		}
+		// The SDK path accepts one text turn with an optional system message and refuses
+		// tool, vision and n>1 contracts outright, so the scenarios below would assert
+		// against a documented refusal rather than a regression. Model routing also goes
+		// through the Copilot runtime, which resolves its own catalog.
+		testConfig.ChatModel = copilotOAuthModel()
+		testConfig.TextModel = testConfig.ChatModel
+		testConfig.ReasoningModel = testConfig.ChatModel
+		testConfig.VisionModel = testConfig.ChatModel
+		testConfig.Fallbacks = nil
+		testConfig.Scenarios = llmtests.TestScenarios{
+			SimpleChat:       true,
+			CompletionStream: true,
+			ListModels:       true,
+		}
+	}
+
 	t.Run("GithubCopilotTests", func(t *testing.T) {
 		llmtests.RunAllComprehensiveTests(t, client, ctx, testConfig)
 	})
 }
 
+// copilotOAuthModel lets the operator pin a model their Copilot plan actually serves;
+// entitlements differ per account, so a hardcoded default would fail for valid credentials.
+func copilotOAuthModel() string {
+	if model := strings.TrimSpace(os.Getenv("GITHUB_COPILOT_OAUTH_MODEL")); model != "" {
+		return model
+	}
+	return "gpt-5.5"
+}
+
 // hasCopilotCredentials reports whether enough credentials are present to run the live
-// suite: either a direct Copilot API token, or the complete GitHub App bundle.
+// suite: an OAuth user token, a direct Copilot API token, or the complete GitHub App bundle.
 //
 // Completeness matters. A partial bundle does not fail fast, it reaches SetupTest with empty
 // installation, repository or private-key values and fails deep inside the provider, where
 // the error reads like a Bifrost bug rather than a missing secret.
 func hasCopilotCredentials(getenv func(string) string) bool {
+	if hasCopilotOAuthCredentials(getenv) {
+		return true
+	}
 	if strings.TrimSpace(getenv("GITHUB_COPILOT_API_KEY")) != "" {
 		return true
 	}
@@ -104,4 +139,12 @@ func hasCopilotCredentials(getenv func(string) string) bool {
 		}
 	}
 	return true
+}
+
+// hasCopilotOAuthCredentials reports whether the device-login pair is present. Both halves
+// are required: the token alone cannot identify which app minted it, and the client ID
+// alone cannot authenticate.
+func hasCopilotOAuthCredentials(getenv func(string) string) bool {
+	return strings.TrimSpace(getenv("GITHUB_COPILOT_OAUTH_TOKEN")) != "" &&
+		strings.TrimSpace(getenv("GITHUB_COPILOT_AUTH_CLIENT_ID")) != ""
 }

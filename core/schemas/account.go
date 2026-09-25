@@ -883,11 +883,45 @@ type DatabricksKeyConfig struct {
 //
 // See https://docs.github.com/en/copilot/how-tos/copilot-sdk/auth/server-to-server-tokens
 type GithubCopilotKeyConfig struct {
+	AuthMode     string `json:"auth_mode,omitempty"`
+	AuthClientID string `json:"auth_client_id,omitempty"`
+	// RefreshToken is the ghr_ token from a device login. GitHub waives the client
+	// secret for device-flow refreshes, so this plus AuthClientID is enough to mint a
+	// new access token. Refreshing rotates both, so a stale copy breaks the chain.
+	RefreshToken SecretVar `json:"refresh_token,omitempty"`
+	// TokenExpiresAt is unix seconds. User access tokens last 8h, which is short enough
+	// that a gateway must refresh unattended rather than wait to be re-authorised.
+	TokenExpiresAt int64     `json:"token_expires_at,omitempty"`
 	AppID          SecretVar `json:"app_id"`                  // GitHub App ID or Client ID; the App JWT issuer (required)
 	InstallationID SecretVar `json:"installation_id"`         // Installation to mint tokens for; digits only (required)
 	RepositoryID   SecretVar `json:"repository_id"`           // Repository the installation token is scoped to; digits only (required)
 	PrivateKey     SecretVar `json:"private_key"`             // GitHub App private key, PKCS#1 or PKCS#8 PEM (required)
 	GithubDomain   SecretVar `json:"github_domain,omitempty"` // GitHub Enterprise domain, e.g. "acme.ghe.com". Empty means github.com.
+}
+
+// CanRefresh reports whether this key can renew its own access token without sending a
+// user back through a browser.
+//
+// This is derived rather than configured on purpose. GitHub omits both the refresh token
+// and the expiry when an app opts out of user-token expiration, so a GitHub App with that
+// setting off behaves exactly like an OAuth App. App type therefore does not decide
+// refreshability, the app's setting does — and an operator can change it after Bifrost is
+// configured, which would leave any stored answer wrong.
+func (config *GithubCopilotKeyConfig) CanRefresh() bool {
+	return config != nil &&
+		config.AuthMode == "oauth" &&
+		config.RefreshToken.IsSet() &&
+		strings.TrimSpace(config.AuthClientID) != ""
+}
+
+// NeedsRefresh reports whether the access token is close enough to expiry to renew, given
+// a safety margin. A zero expiry means the token does not expire, which is what GitHub
+// reports for apps that opted out.
+func (config *GithubCopilotKeyConfig) NeedsRefresh(nowUnix int64, marginSeconds int64) bool {
+	if config == nil || config.TokenExpiresAt == 0 {
+		return false
+	}
+	return nowUnix+marginSeconds >= config.TokenExpiresAt
 }
 
 // Account defines the interface for managing provider accounts and their configurations.

@@ -4933,6 +4933,26 @@
             "github_copilot_key_config": {
               "type": "object",
               "properties": {
+                "auth_mode": {
+                  "type": "string",
+                  "enum": ["oauth", "api_token"],
+                  "description": "OAuth user token via the SDK runtime, or a pre-generated Copilot API token. Omit for legacy GitHub App configuration."
+                },
+                "auth_client_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Public Client ID of the GitHub App or OAuth App used for device authorization. Create one at https://github.com/settings/apps with Device Flow enabled."
+                },
+                "refresh_token": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Refresh token from the device login (ghr_, can use env. prefix). Written by Bifrost when the app issues expiring user tokens, and rotated on every renewal; apps whose tokens never expire omit it."
+                },
+                "token_expires_at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix seconds at which the access token expires. Written by Bifrost; zero or absent means the token does not expire."
+                },
                 "app_id": {
                   "type": "string",
                   "minLength": 1,
@@ -4958,7 +4978,11 @@
                   "description": "GitHub Enterprise domain, e.g. acme.ghe.com. Leave unset for github.com."
                 }
               },
-              "required": ["app_id", "installation_id", "repository_id", "private_key"],
+              "anyOf": [
+                { "properties": { "auth_mode": { "const": "oauth" } }, "required": ["auth_mode", "auth_client_id"] },
+                { "properties": { "auth_mode": { "const": "api_token" } }, "required": ["auth_mode"] },
+                { "not": { "required": ["auth_mode"] }, "required": ["app_id", "installation_id", "repository_id", "private_key"] }
+              ],
               "additionalProperties": false
             }
           }

@@ -487,6 +487,8 @@ var configstoreMigrationSteps = []migrationStep{
 	{IDs: []string{"add_mcp_oauth_token_status_reason_column"}, run: migrationAddMCPOauthTokenStatusReasonColumn},
 	{IDs: []string{"add_databricks_key_config_columns"}, run: migrationAddDatabricksKeyConfigColumns},
 	{IDs: []string{"add_github_copilot_config_columns"}, run: migrationAddGithubCopilotConfigColumns},
+	{IDs: []string{"add_github_copilot_oauth_columns"}, run: migrationAddGithubCopilotOAuthColumns},
+	{IDs: []string{"add_github_copilot_refresh_columns"}, run: migrationAddGithubCopilotRefreshColumns},
 	{IDs: []string{"add_mcp_client_endpoint_slug"}, run: migrationAddMCPClientEndpointSlug},
 	{IDs: []string{"add_allow_all_providers_to_virtual_key"}, run: migrationAddAllowAllProvidersToVirtualKey},
 	{IDs: []string{"backfill_vk_allow_all_providers_hash"}, run: migrationBackfillVirtualKeyAllowAllProvidersHash},
@@ -13428,6 +13430,59 @@ var githubCopilotConfigColumns = []string{
 	"github_copilot_repository_id",
 	"github_copilot_private_key",
 	"github_copilot_github_domain",
+}
+
+func migrationAddGithubCopilotOAuthColumns(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migration := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_github_copilot_oauth_columns",
+		Migrate: func(tx *gorm.DB) error {
+			for _, column := range []string{
+				"github_copilot_auth_mode",
+				"github_copilot_auth_client_id",
+				"github_copilot_refresh_token",
+				"github_copilot_token_expires_at",
+			} {
+				if err := addColumnIfNotExists(tx.WithContext(ctx), logger, &tables.TableKey{}, column); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Rollback: func(*gorm.DB) error {
+			return fmt.Errorf("OAuth credential mode columns cannot be removed without changing stored token semantics")
+		},
+	}})
+	return migration.Migrate()
+}
+
+// migrationAddGithubCopilotRefreshColumns exists because the migration above may already
+// be recorded as applied. The migrator keys on ID, so widening that one's column list does
+// nothing for a database created before the change — it boots instead with the columns it
+// had and fails on the first provider config write. A separate ID is the only thing that
+// runs again.
+//
+// addColumnIfNotExists makes this a no-op on a fresh database, where the migration above
+// already created all four.
+func migrationAddGithubCopilotRefreshColumns(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migration := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: "add_github_copilot_refresh_columns",
+		Migrate: func(tx *gorm.DB) error {
+			for _, column := range []string{
+				"github_copilot_auth_client_id",
+				"github_copilot_refresh_token",
+				"github_copilot_token_expires_at",
+			} {
+				if err := addColumnIfNotExists(tx.WithContext(ctx), logger, &tables.TableKey{}, column); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Rollback: func(*gorm.DB) error {
+			return fmt.Errorf("refresh credential columns cannot be removed without stranding keys that can no longer renew")
+		},
+	}})
+	return migration.Migrate()
 }
 
 // migrationAddGithubCopilotConfigColumns adds the GitHub App credential columns to the key

@@ -776,6 +776,21 @@ func validateProviderKeyURL(provider schemas.ModelProvider, key schemas.Key) err
 			return fmt.Errorf("sgl_key_config.url is required for SGL keys")
 		}
 	case schemas.GithubCopilot:
+		if config := key.GithubCopilotKeyConfig; config != nil && config.AuthMode != "" {
+			if config.AuthMode != "oauth" && config.AuthMode != "api_token" {
+				return fmt.Errorf("unknown GitHub Copilot authentication mode")
+			}
+			if !key.Value.IsSet() {
+				return fmt.Errorf("GitHub Copilot token is required")
+			}
+			if config.AuthMode == "oauth" && strings.TrimSpace(config.AuthClientID) == "" {
+				return fmt.Errorf("OAuth Client ID is required")
+			}
+			if config.AppID.IsSet() || config.InstallationID.IsSet() || config.RepositoryID.IsSet() || config.PrivateKey.IsSet() {
+				return fmt.Errorf("OAuth and API token modes cannot include GitHub App credentials")
+			}
+			return nil
+		}
 		// A Copilot API token in value is a valid alternative to the GitHub App bundle. But a
 		// supplied App config is checked either way: a half-filled block sitting behind a
 		// token persists silently and only surfaces later, when the token expires or is

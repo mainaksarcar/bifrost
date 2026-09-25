@@ -114,6 +114,10 @@ type TableKey struct {
 	GithubCopilotRepositoryID   *schemas.SecretVar `gorm:"type:text" json:"github_copilot_repository_id,omitempty"`
 	GithubCopilotPrivateKey     *schemas.SecretVar `gorm:"type:text" json:"github_copilot_private_key,omitempty"`
 	GithubCopilotGithubDomain   *schemas.SecretVar `gorm:"type:text" json:"github_copilot_github_domain,omitempty"`
+	GithubCopilotAuthMode       string             `gorm:"type:text" json:"-"`
+	GithubCopilotAuthClientID   string             `gorm:"type:text" json:"-"`
+	GithubCopilotRefreshToken   *schemas.SecretVar `gorm:"type:text" json:"-"`
+	GithubCopilotTokenExpiresAt int64              `gorm:"type:bigint" json:"-"`
 
 	// Virtual fields for runtime use (not stored in DB)
 	Models                 schemas.WhiteList               `gorm:"-" json:"models"` // ["*"] allows all models; empty denies all (deny-by-default)
@@ -512,6 +516,15 @@ func (k *TableKey) BeforeSave(tx *gorm.DB) error {
 	// above: the caller may retain the config struct pointer, and encryption mutates in
 	// place, so sharing one would corrupt the caller's in-memory config.
 	if k.GithubCopilotKeyConfig != nil {
+		k.GithubCopilotAuthMode = k.GithubCopilotKeyConfig.AuthMode
+		k.GithubCopilotAuthClientID = k.GithubCopilotKeyConfig.AuthClientID
+		k.GithubCopilotTokenExpiresAt = k.GithubCopilotKeyConfig.TokenExpiresAt
+		if k.GithubCopilotKeyConfig.RefreshToken.IsSet() {
+			v := k.GithubCopilotKeyConfig.RefreshToken
+			k.GithubCopilotRefreshToken = &v
+		} else {
+			k.GithubCopilotRefreshToken = nil
+		}
 		if k.GithubCopilotKeyConfig.AppID.IsSet() {
 			v := k.GithubCopilotKeyConfig.AppID
 			k.GithubCopilotAppID = &v
@@ -548,7 +561,10 @@ func (k *TableKey) BeforeSave(tx *gorm.DB) error {
 		k.GithubCopilotRepositoryID = nil
 		k.GithubCopilotPrivateKey = nil
 		k.GithubCopilotGithubDomain = nil
-
+		k.GithubCopilotAuthMode = ""
+		k.GithubCopilotAuthClientID = ""
+		k.GithubCopilotRefreshToken = nil
+		k.GithubCopilotTokenExpiresAt = 0
 	}
 
 	// Store plaintext SecretVar columns into the vault and rewrite them to vault refs.
@@ -1057,8 +1073,16 @@ func (k *TableKey) AfterFind(tx *gorm.DB) error {
 	// Reconstruct GitHub Copilot config if any field is present
 	if k.GithubCopilotAppID != nil || k.GithubCopilotInstallationID != nil ||
 		k.GithubCopilotRepositoryID != nil || k.GithubCopilotPrivateKey != nil ||
-		k.GithubCopilotGithubDomain != nil {
-		config := &schemas.GithubCopilotKeyConfig{}
+		k.GithubCopilotGithubDomain != nil || k.GithubCopilotAuthMode != "" || k.GithubCopilotAuthClientID != "" ||
+		k.GithubCopilotRefreshToken != nil {
+		config := &schemas.GithubCopilotKeyConfig{
+			AuthMode:       k.GithubCopilotAuthMode,
+			AuthClientID:   k.GithubCopilotAuthClientID,
+			TokenExpiresAt: k.GithubCopilotTokenExpiresAt,
+		}
+		if k.GithubCopilotRefreshToken != nil {
+			config.RefreshToken = *k.GithubCopilotRefreshToken
+		}
 		if k.GithubCopilotAppID != nil {
 			config.AppID = *k.GithubCopilotAppID
 		}
