@@ -1044,7 +1044,11 @@ func (g *GenericRouter) handleNonStreamingRequest(ctx *fasthttp.RequestCtx, conf
 		}
 
 		// Convert Bifrost response to integration-specific format and send
-		response, err = config.TextResponseConverter(bifrostCtx, textCompletionResponse)
+		if config.TextResponseConverter != nil {
+			response, err = config.TextResponseConverter(bifrostCtx, textCompletionResponse)
+		} else {
+			response = textCompletionResponse
+		}
 		bifrostExtraFields = textCompletionResponse.ExtraFields
 	case bifrostReq.ChatRequest != nil:
 		chatResponse, bifrostErr := g.client.ChatCompletionRequest(bifrostCtx, bifrostReq.ChatRequest)
@@ -1068,7 +1072,11 @@ func (g *GenericRouter) handleNonStreamingRequest(ctx *fasthttp.RequestCtx, conf
 		}
 
 		// Convert Bifrost response to integration-specific format and send
-		response, err = config.ChatResponseConverter(bifrostCtx, chatResponse)
+		if config.ChatResponseConverter != nil {
+			response, err = config.ChatResponseConverter(bifrostCtx, chatResponse)
+		} else {
+			response = chatResponse
+		}
 		bifrostExtraFields = chatResponse.ExtraFields
 	case bifrostReq.ResponsesRequest != nil:
 		responsesResponse, bifrostErr := g.client.ResponsesRequest(bifrostCtx, bifrostReq.ResponsesRequest)
@@ -1092,7 +1100,11 @@ func (g *GenericRouter) handleNonStreamingRequest(ctx *fasthttp.RequestCtx, conf
 		}
 
 		// Convert Bifrost response to integration-specific format and send
-		response, err = config.ResponsesResponseConverter(bifrostCtx, responsesResponse)
+		if config.ResponsesResponseConverter != nil {
+			response, err = config.ResponsesResponseConverter(bifrostCtx, responsesResponse)
+		} else {
+			response = responsesResponse
+		}
 		bifrostExtraFields = responsesResponse.ExtraFields
 	case bifrostReq.EmbeddingRequest != nil:
 		embeddingResponse, bifrostErr := g.client.EmbeddingRequest(bifrostCtx, bifrostReq.EmbeddingRequest)
@@ -1116,7 +1128,11 @@ func (g *GenericRouter) handleNonStreamingRequest(ctx *fasthttp.RequestCtx, conf
 		}
 		bifrostExtraFields = embeddingResponse.ExtraFields
 		// Convert Bifrost response to integration-specific format and send
-		response, err = config.EmbeddingResponseConverter(bifrostCtx, embeddingResponse)
+		if config.EmbeddingResponseConverter != nil {
+			response, err = config.EmbeddingResponseConverter(bifrostCtx, embeddingResponse)
+		} else {
+			response = embeddingResponse
+		}
 	case bifrostReq.RerankRequest != nil:
 		rerankResponse, bifrostErr := g.client.RerankRequest(bifrostCtx, bifrostReq.RerankRequest)
 		if bifrostErr != nil {

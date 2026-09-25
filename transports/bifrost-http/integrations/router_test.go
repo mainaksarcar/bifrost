@@ -992,6 +992,55 @@ func Test_handleStreaming_RetentionCancelsAndLeavesNoGoroutine(t *testing.T) {
 	// lib.TestClientDisconnectWatcher_RetentionNoGoroutineLeak against a real socket.
 }
 
+// A route defines converters only for the chunk types its own API can express, but a
+// provider may serve one request type via another - ResponsesStream falling back to
+// ChatCompletionStream - and hand back a chunk the route cannot render. The Anthropic
+// /v1/messages route carries no chat stream converter, so such a chunk used to call a
+// nil converter and take the whole gateway process down with it, killing every
+// in-flight request on every provider.
+func Test_handleStreaming_MissingConverterEndsStreamInsteadOfCrashing(t *testing.T) {
+	stream := make(chan *schemas.BifrostStreamChunk)
+	router := NewGenericRouter(nil, &mockHandlerStore{}, nil, nil, nil, bifrost.NewNoOpLogger())
+	ctx := &fasthttp.RequestCtx{}
+
+	// Shaped like /v1/messages: a Responses converter and nothing else.
+	config := RouteConfig{
+		Type: RouteConfigTypeAnthropic,
+		StreamConfig: &StreamConfig{
+			ResponsesStreamResponseConverter: func(*schemas.BifrostContext, *schemas.BifrostResponsesStreamResponse) (string, interface{}, error) {
+				return "message_delta", map[string]string{"type": "message_delta"}, nil
+			},
+		},
+	}
+
+	rec := newCancelRecorder()
+	router.handleStreaming(ctx, nil, config, stream, rec.cancel)
+
+	readDone := make(chan string, 1)
+	go func() {
+		body, _ := io.ReadAll(ctx.Response.BodyStream())
+		readDone <- string(body)
+	}()
+
+	// A chat chunk on a route that can only render Responses events.
+	stream <- &schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{}}
+	close(stream)
+
+	var body string
+	select {
+	case body = <-readDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("response body stream never closed: the unrenderable chunk wedged the stream")
+	}
+
+	// Skipping the chunk would drain every sibling the same way and hand the client a
+	// silent, empty 200, so the stream has to end with an error the caller can see.
+	require.Contains(t, body, "error",
+		"an unrenderable chunk must end the stream with an error event, got: "+body)
+	rec.requireCancelled(t, "handleStreaming left the request context uncancelled after "+
+		"failing on a chunk the route has no converter for")
+}
+
 // cancelRecorder captures the cancel func handed to handleStreaming.
 //
 // handleStreaming cancels from its producer goroutine's deferred cleanup, which runs after
