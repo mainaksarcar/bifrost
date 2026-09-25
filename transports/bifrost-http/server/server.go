@@ -257,6 +257,7 @@ type BifrostHTTPServer struct {
 	TempTokens           *temptoken.Service
 	TempTokenSweepWorker *temptoken.SweepWorker
 	OAuth2SweepWorker    *oauth2SweepWorker
+	CopilotRefreshWorker *copilotTokenRefreshWorker
 	// OAuth2IdentityResolver scopes a user-mode /mcp request to the user's own
 	// tools. Optional; wired at server init when user-mode identity resolution
 	// is available, otherwise left nil (user-mode requests fall back to the
@@ -2337,6 +2338,26 @@ func (s *BifrostHTTPServer) StartOAuth2SweepWorker(ctx context.Context, shouldSw
 	s.OAuth2SweepWorker.start(ctx)
 }
 
+// StartCopilotRefreshWorker creates and starts the renewer for GitHub Copilot device-login
+// credentials. Call it once from single-threaded bootstrap wiring, like the other worker
+// fields on this struct — the nil-check makes double-wiring a no-op, it is not a
+// concurrency guard. It is a no-op when no config store is configured, and the Start()
+// shutdown path stops the worker.
+//
+// shouldRefresh, when non-nil, is consulted before each pass; returning false skips that
+// pass. Refreshing rotates the credential, so two instances renewing the same key would
+// race to persist a token GitHub has already invalidated — deployments sharing one config
+// store should elect a single refresher. nil means always refresh.
+func (s *BifrostHTTPServer) StartCopilotRefreshWorker(ctx context.Context, shouldRefresh func() bool) {
+	if s.CopilotRefreshWorker != nil || s.Config == nil || s.Config.ConfigStore == nil {
+		return
+	}
+	s.CopilotRefreshWorker = newCopilotTokenRefreshWorker(s.Config.ConfigStore, logger, shouldRefresh)
+	if s.CopilotRefreshWorker != nil {
+		s.CopilotRefreshWorker.start(ctx)
+	}
+}
+
 // RegisterInferenceRoutes initializes the routes for the inference handler
 func (s *BifrostHTTPServer) RegisterInferenceRoutes(ctx context.Context, middlewares ...schemas.BifrostHTTPMiddleware) error {
 	// Initialize WebSocket pool and handler before integrations so it can be wired through
@@ -2899,6 +2920,7 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 			s.TempTokenSweepWorker.Start(s.Ctx)
 		}
 		s.StartOAuth2SweepWorker(s.Ctx, nil)
+		s.StartCopilotRefreshWorker(s.Ctx, nil)
 		// Hand the service to the OAuth provider so InitiateUserOAuthFlow mints
 		// a mcp_auth token and embeds it as a URL fragment on the auth-page link.
 		if s.Config.OAuthProvider != nil {
@@ -2920,6 +2942,10 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 			if s.OAuth2SweepWorker != nil {
 				s.OAuth2SweepWorker.stop()
 				s.OAuth2SweepWorker = nil
+			}
+			if s.CopilotRefreshWorker != nil {
+				s.CopilotRefreshWorker.stop()
+				s.CopilotRefreshWorker = nil
 			}
 			return fmt.Errorf("failed to initialize auth middleware: %v", err)
 		}
@@ -2964,6 +2990,10 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		if s.OAuth2SweepWorker != nil {
 			s.OAuth2SweepWorker.stop()
 			s.OAuth2SweepWorker = nil
+		}
+		if s.CopilotRefreshWorker != nil {
+			s.CopilotRefreshWorker.stop()
+			s.CopilotRefreshWorker = nil
 		}
 		return fmt.Errorf("failed to initialize routes: %v", err)
 	}
@@ -3010,6 +3040,10 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		if s.OAuth2SweepWorker != nil {
 			s.OAuth2SweepWorker.stop()
 			s.OAuth2SweepWorker = nil
+		}
+		if s.CopilotRefreshWorker != nil {
+			s.CopilotRefreshWorker.stop()
+			s.CopilotRefreshWorker = nil
 		}
 		return fmt.Errorf("failed to initialize inference routes: %v", err)
 	}
@@ -3184,6 +3218,11 @@ func (s *BifrostHTTPServer) Start() error {
 				logger.Info("stopping oauth2 sweep worker...")
 				s.OAuth2SweepWorker.stop()
 				s.OAuth2SweepWorker = nil
+			}
+			if s.CopilotRefreshWorker != nil {
+				logger.Info("stopping copilot token refresh worker...")
+				s.CopilotRefreshWorker.stop()
+				s.CopilotRefreshWorker = nil
 			}
 			if s.SidekiqDispatcherStop != nil {
 				logger.Info("stopping sidekiq dispatcher...")
