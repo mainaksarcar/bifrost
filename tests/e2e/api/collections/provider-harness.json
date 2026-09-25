@@ -410,6 +410,312 @@
   ],
   "item": [
     {
+      "name": "Copilot OAuth SDK Regression",
+      "description": "Requires a saved github-copilot OAuth key and a copilot_inprocess build with the bundled native runtime. Run with no bridge and no BIFROST_COPILOT_SDK_URL. Pins nonstreaming text through the provider-owned SDK. Enable include_preview for this opt-in account-scoped case.",
+      "item": [
+        {
+          "name": "[PREVIEW] github-copilot gpt-5-mini saved OAuth SDK chat",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Saved OAuth key produces assistant text', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var result = pm.response.json();",
+                  "  pm.expect(result.choices[0].message.role).to.equal('assistant');",
+                  "  pm.expect(result.choices[0].message.content).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"github-copilot/gpt-5-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly OK.\"}],\"stream\":false}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[PREVIEW] github-copilot gpt-5-mini saved OAuth SDK chat stream",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Saved OAuth key streams incremental deltas', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var deltas = [];",
+                  "  var finish = null;",
+                  "  pm.response.text().split('\\n').forEach(function (line) {",
+                  "    if (line.indexOf('data:') !== 0) { return; }",
+                  "    var payload = line.slice(5).trim();",
+                  "    if (!payload || payload === '[DONE]') { return; }",
+                  "    var choice = (JSON.parse(payload).choices || [])[0];",
+                  "    if (!choice) { return; }",
+                  "    if (choice.delta && typeof choice.delta.content === 'string' && choice.delta.content.length) { deltas.push(choice.delta.content); }",
+                  "    if (choice.finish_reason) { finish = choice.finish_reason; }",
+                  "  });",
+                  "  pm.expect(deltas.length, 'expected incremental deltas, saw ' + deltas.length).to.be.above(1);",
+                  "  pm.expect(deltas.join(''), 'streamed text must not be empty').to.not.be.empty;",
+                  "  pm.expect(finish, 'stream must carry a terminal finish_reason').to.equal('stop');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"github-copilot/gpt-5-mini\",\"messages\":[{\"role\":\"user\",\"content\":\"Count from 1 to 5, one number per line.\"}],\"stream\":true}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[PREVIEW] github-copilot gpt-5-mini saved OAuth SDK chat stream reports usage",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('SDK stream carries token usage on the terminal chunk', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var usage = null;",
+                  "  pm.response.text().split('\\n').forEach(function (line) {",
+                  "    if (line.indexOf('data:') !== 0) { return; }",
+                  "    var payload = line.slice(5).trim();",
+                  "    if (!payload || payload === '[DONE]') { return; }",
+                  "    var parsed = JSON.parse(payload);",
+                  "    if (parsed.usage) { usage = parsed.usage; }",
+                  "  });",
+                  "  pm.expect(usage, 'no chunk carried usage: governance bills this call as free').to.be.an('object');",
+                  "  pm.expect(usage.total_tokens, 'usage.total_tokens must be counted').to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\": \"github-copilot/gpt-5-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"Reply with exactly OK.\"}], \"stream\": true}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[PREVIEW] github-copilot gpt-5-mini saved OAuth SDK reports dropped max_tokens",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Unhonoured output cap is reported to the caller', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var extra = pm.response.json().extra_fields || {};",
+                  "  var dropped = extra.dropped_compat_plugin_params || [];",
+                  "  pm.expect(dropped, 'max_tokens was dropped silently, so the reply is unbounded with no signal').to.include('max_completion_tokens');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\": \"github-copilot/gpt-5-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"Reply with exactly OK.\"}], \"max_tokens\": 16, \"stream\": false}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[PREVIEW] github-copilot gpt-5-mini saved OAuth SDK responses stream emits lifecycle events",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Responses stream emits Responses events, not chat chunks', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var types = [];",
+                  "  var chatFrames = 0;",
+                  "  pm.response.text().split('\\n').forEach(function (line) {",
+                  "    if (line.indexOf('data:') !== 0) { return; }",
+                  "    var payload = line.slice(5).trim();",
+                  "    if (!payload || payload === '[DONE]') { return; }",
+                  "    var parsed = JSON.parse(payload);",
+                  "    if (parsed.type) { types.push(parsed.type); }",
+                  "    if (parsed.object === 'chat.completion.chunk') { chatFrames++; }",
+                  "  });",
+                  "  pm.expect(chatFrames, 'chat chunks leaked onto the Responses wire').to.equal(0);",
+                  "  pm.expect(types, 'stream never opened').to.include('response.created');",
+                  "  pm.expect(types, 'stream carried no text deltas').to.include('response.output_text.delta');",
+                  "  pm.expect(types, 'stream never completed').to.include('response.completed');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\": \"github-copilot/gpt-5-mini\", \"input\": \"Count from 1 to 5, one number per line.\", \"stream\": true}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/responses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "responses"
+              ]
+            }
+          }
+        },
+        {
+          "name": "[PREVIEW] github-copilot gpt-5-mini saved OAuth SDK anthropic messages stream",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Anthropic stream returns events instead of killing the gateway', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.equal(200);",
+                  "  var types = [];",
+                  "  pm.response.text().split('\\n').forEach(function (line) {",
+                  "    if (line.indexOf('data:') !== 0) { return; }",
+                  "    var payload = line.slice(5).trim();",
+                  "    if (!payload || payload === '[DONE]') { return; }",
+                  "    var parsed = JSON.parse(payload);",
+                  "    if (parsed.type) { types.push(parsed.type); }",
+                  "  });",
+                  "  pm.expect(types, 'stream never opened').to.include('message_start');",
+                  "  pm.expect(types, 'stream carried no content deltas').to.include('content_block_delta');",
+                  "  pm.expect(types, 'stream never terminated').to.include('message_stop');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\": \"github-copilot/gpt-5-mini\", \"messages\": [{\"role\": \"user\", \"content\": \"Count from 1 to 5, one number per line.\"}], \"max_tokens\": 64, \"stream\": true}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/anthropic/v1/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "anthropic",
+                "v1",
+                "messages"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "1. Native Bifrost API",
       "description": "Bifrost's own OpenAI-shaped surface. Use a `provider/model` string in the `model` field to route to any configured backend.",
       "item": [
