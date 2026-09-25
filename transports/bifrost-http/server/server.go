@@ -1561,10 +1561,19 @@ func (s *BifrostHTTPServer) NarrowListModelsProviders(ctx *schemas.BifrostContex
 	if err != nil || access == nil {
 		return
 	}
-	granted := access.GrantedProvidersForModel("")
-	providers := make([]schemas.ModelProvider, 0, len(granted))
-	for _, provider := range granted {
-		providers = append(providers, schemas.ModelProvider(provider))
+	// Asking per provider, rather than enumerating the granted ones, is what keeps this
+	// agreeing with inference: a key that allows every provider holds no explicit provider
+	// permit to enumerate, so enumerating returned nothing and listed nothing while the
+	// very same key happily served completions.
+	configured, err := s.Config.GetAllProviders()
+	if err != nil {
+		return
+	}
+	providers := make([]schemas.ModelProvider, 0, len(configured))
+	for _, provider := range configured {
+		if access.IsProviderAllowed(string(provider)) {
+			providers = append(providers, provider)
+		}
 	}
 	ctx.SetValue(schemas.BifrostContextKeyAvailableProviders, providers)
 }
